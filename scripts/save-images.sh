@@ -17,7 +17,7 @@ IMAGES_DIR="${PROJECT_DIR}/images"
 # The mlflow image is built locally — build it first if it doesn't exist
 IMAGES=(
   "traefik:v3.6"
-  "postgres:17"
+  "postgres:18"
   "quay.io/minio/minio:latest"
   "quay.io/minio/mc:latest"
   "mlflow-quick-stack:latest"

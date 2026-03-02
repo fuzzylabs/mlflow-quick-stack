@@ -35,7 +35,7 @@ echo ""
 # Expected images from docker-compose.yml
 EXPECTED=(
   "traefik:v3.6"
-  "postgres:17"
+  "postgres:18"
   "quay.io/minio/minio:latest"
   "quay.io/minio/mc:latest"
   "mlflow-quick-stack:latest"
