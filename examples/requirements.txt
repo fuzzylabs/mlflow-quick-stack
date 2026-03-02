@@ -1,0 +1,5 @@
+# MLflow Quick Stack — Example dependencies
+mlflow>=3.10.0
+boto3
+requests
+openai

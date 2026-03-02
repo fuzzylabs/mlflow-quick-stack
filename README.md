@@ -96,7 +96,7 @@ but you can also point it at an external Ollama server on your network.
 ### Prerequisites
 
 1. Install and run [Ollama](https://ollama.com) on the host or a remote machine
-2. Pull a model: `ollama pull deepseek-r1:32b`
+2. Pull a model: `ollama pull <model-name>` (e.g. `llama3`, `mistral`, `deepseek-r1:32b`)
 
 ### Ollama Connection Options
 
@@ -196,7 +196,7 @@ And remove `extra_hosts: host.docker.internal:host-gateway` from the `mlflow` se
 Pull models after the container starts:
 
 ```bash
-docker compose exec ollama ollama pull deepseek-r1:32b
+docker compose exec ollama ollama pull <model-name>
 ```
 
 ### Creating an Endpoint via the UI
@@ -208,7 +208,7 @@ docker compose exec ollama ollama pull deepseek-r1:32b
    - **Provider**: Ollama
    - **API Base URL**: the URL from the connection table above (e.g. `http://host.docker.internal:11434` for local, or `http://192.168.1.50:11434` for remote)
    - **API Key Name / API Key**: use the secret you created (value is ignored by Ollama)
-   - **Model**: the Ollama model name (e.g. `deepseek-r1:32b`)
+   - **Model**: the Ollama model name (e.g. `llama3`, `mistral`, `deepseek-r1:32b`)
 
 ### Testing via curl
 
@@ -254,7 +254,7 @@ mlflow.ollama.autolog()
 
 with mlflow.start_run():
     response = ollama.chat(
-        model="deepseek-r1:32b",
+        model="<model-name>",
         messages=[{"role": "user", "content": "Hello!"}]
     )
 ```

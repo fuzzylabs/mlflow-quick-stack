@@ -16,5 +16,9 @@ images/*
 # Runtime env (contains secrets)
 .env
 
+# Python
+__pycache__/
+*.pyc
+
 # macOS
 .DS_Store
