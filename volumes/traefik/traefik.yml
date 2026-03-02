@@ -1,0 +1,50 @@
+# ============================================================================
+# Traefik — Static Configuration
+# ============================================================================
+# Mounted at /etc/traefik/traefik.yml inside the container.
+# Dynamic routing, services, middlewares and TLS certs live in
+# /etc/traefik/dynamic/ (file provider below).
+# ============================================================================
+
+# ── API / Dashboard ──────────────────────────────────────────────────────────
+api:
+  dashboard: true
+  # insecure: true   # uncomment ONLY for debugging (exposes on :8080 without auth)
+
+# ── Entry Points ─────────────────────────────────────────────────────────────
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+
+# ── Providers ────────────────────────────────────────────────────────────────
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+# ── Certificate Resolvers (Let's Encrypt) ────────────────────────────────────
+# Uncomment the block below to use real certificates in production.
+# Make sure port 80 is reachable from the internet for the HTTP-01 challenge.
+#
+# certificatesResolvers:
+#   letsencrypt:
+#     acme:
+#       email: you@example.com
+#       storage: /letsencrypt/acme.json
+#       httpChallenge:
+#         entryPoint: web
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+log:
+  level: INFO
+
+accessLog: {}

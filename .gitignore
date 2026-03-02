@@ -1,0 +1,20 @@
+# Persistent data (volumes/)
+# Ignore runtime data but track config files and .gitkeep placeholders
+volumes/postgres/*
+!volumes/postgres/.gitkeep
+volumes/minio/*
+!volumes/minio/.gitkeep
+volumes/traefik/certs/*
+!volumes/traefik/certs/.gitkeep
+volumes/traefik/acme/*
+!volumes/traefik/acme/.gitkeep
+
+# Saved Docker images (large .tar files)
+images/*
+!images/.gitkeep
+
+# Runtime env (contains secrets)
+.env
+
+# macOS
+.DS_Store

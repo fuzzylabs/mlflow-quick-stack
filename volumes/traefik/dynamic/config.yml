@@ -1,0 +1,103 @@
+# ============================================================================
+# Traefik — Dynamic Configuration
+# ============================================================================
+# This file is hot-reloaded by Traefik's file provider.
+#
+# IMPORTANT: Traefik's file provider does NOT support environment variable
+# interpolation.  If you change the DOMAIN in .env you must also update the
+# Host() rules below.  Default domain: local.dev
+# ============================================================================
+
+# ── HTTP Routers ─────────────────────────────────────────────────────────────
+http:
+  routers:
+    # MLflow Tracking UI & API (uses MLflow's built-in auth)
+    mlflow:
+      entryPoints:
+        - websecure
+      rule: "Host(`mlflow.local.dev`)"
+      service: mlflow-svc
+      tls: {}
+
+    # MinIO Console (web UI)
+    minio-console:
+      entryPoints:
+        - websecure
+      rule: "Host(`minio.local.dev`)"
+      service: minio-console-svc
+      tls: {}
+
+    # MinIO S3 API
+    minio-api:
+      entryPoints:
+        - websecure
+      rule: "Host(`s3.local.dev`)"
+      service: minio-api-svc
+      tls: {}
+
+    # Traefik Dashboard
+    traefik-dashboard:
+      entryPoints:
+        - websecure
+      rule: "Host(`traefik.local.dev`)"
+      service: api@internal
+      middlewares:
+        - basic-auth
+      tls: {}
+
+  # ── HTTP Services ────────────────────────────────────────────────────────
+  services:
+    mlflow-svc:
+      loadBalancer:
+        servers:
+          - url: "http://mlflow:5000"
+        passHostHeader: true
+
+    minio-console-svc:
+      loadBalancer:
+        servers:
+          - url: "http://minio:9001"
+        passHostHeader: true
+
+    minio-api-svc:
+      loadBalancer:
+        servers:
+          - url: "http://minio:9000"
+        passHostHeader: true
+
+  # ── HTTP Middlewares ─────────────────────────────────────────────────────
+  middlewares:
+    # Basic-auth for ALL frontends
+    # Default: admin / admin  —  generate your own:  htpasswd -nbB admin 'password'
+    basic-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$05$gTbJjAiwxIIHZgrqfHoHCeR7u/w1FwowVo5vLhtJ0BjtOhtDytpx2"
+        removeHeader: true
+        realm: "MLflow Quick Stack"
+
+    # Useful security headers (optional — applied to any router that references it)
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        forceSTSHeader: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        frameDeny: true
+
+# ── TLS Configuration ───────────────────────────────────────────────────────
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/local-cert.pem
+      keyFile: /etc/traefik/certs/local-key.pem
+
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/local-cert.pem
+        keyFile: /etc/traefik/certs/local-key.pem
+
+  options:
+    default:
+      minVersion: VersionTLS12
