@@ -25,15 +25,15 @@ cp .env.example .env        # edit credentials as needed
 ### 2. Generate self-signed TLS certificates
 
 ```bash
-chmod +x scripts/generate-certs.sh
+chmod +x scripts/*.sh
 ./scripts/generate-certs.sh  # creates volumes/traefik/certs/local-{cert,key}.pem
 ```
 
-On macOS, trust the cert system-wide to avoid browser warnings:
+Trust the certificate system-wide to avoid browser warnings (works on macOS and RHEL/CentOS/Fedora):
 
 ```bash
-sudo security add-trusted-cert -d -r trustRoot \
-    -k /Library/Keychains/System.keychain volumes/traefik/certs/local-cert.pem
+sudo ./scripts/trust-cert.sh         # add to OS trust store
+# sudo ./scripts/trust-cert.sh remove  # revoke later if needed
 ```
 
 ### 3. Add local DNS entries
