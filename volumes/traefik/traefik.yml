@@ -11,6 +11,9 @@ api:
   dashboard: true
   # insecure: true   # uncomment ONLY for debugging (exposes on :8080 without auth)
 
+# ── Ping (healthcheck endpoint) ─────────────────────────────────────────────
+ping: {}
+
 # ── Entry Points ─────────────────────────────────────────────────────────────
 entryPoints:
   web:

@@ -35,6 +35,22 @@ http:
       service: minio-api-svc
       tls: {}
 
+    # LocalAI API
+    localai:
+      entryPoints:
+        - websecure
+      rule: "Host(`localai.local.dev`)"
+      service: localai-svc
+      tls: {}
+
+    # Open WebUI (Chat)
+    open-webui:
+      entryPoints:
+        - websecure
+      rule: "Host(`chat.local.dev`)"
+      service: open-webui-svc
+      tls: {}
+
     # Traefik Dashboard
     traefik-dashboard:
       entryPoints:
@@ -63,6 +79,18 @@ http:
       loadBalancer:
         servers:
           - url: "http://minio:9000"
+        passHostHeader: true
+
+    localai-svc:
+      loadBalancer:
+        servers:
+          - url: "http://localai:8080"
+        passHostHeader: true
+
+    open-webui-svc:
+      loadBalancer:
+        servers:
+          - url: "http://open-webui:8080"
         passHostHeader: true
 
   # ── HTTP Middlewares ─────────────────────────────────────────────────────

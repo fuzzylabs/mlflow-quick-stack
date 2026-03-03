@@ -7,6 +7,8 @@ A single `docker compose up` to get a production-shaped MLflow platform with:
 | **MLflow** | Tracking server (GenAI + AI Gateway, built-in auth) | `https://mlflow.local.dev` |
 | **PostgreSQL 18** | Backend metadata store + auth DB | internal only |
 | **MinIO** | S3-compatible artifact storage | Console: `https://minio.local.dev` / API: `https://s3.local.dev` |
+| **LocalAI** | OpenAI-compatible local model server | `https://localai.local.dev` |
+| **Open WebUI** | Chat UI for LocalAI + Ollama models | `https://chat.local.dev` |
 | **Traefik v3** | HTTPS reverse proxy | Dashboard: `https://traefik.local.dev` |
 
 All traffic goes through Traefik on ports **80** (→ redirect) and **443** (TLS).  
@@ -74,6 +76,8 @@ open https://mlflow.local.dev   # MLflow UI — login with admin / admin-s3cr3t!
 | MLflow | `admin` | `admin-s3cr3t!` | `.env` → `MLFLOW_AUTH_ADMIN_PASSWORD` and `volumes/mlflow/basic_auth.ini` |
 | MinIO Console | `minioadmin` | `minio-s3cr3t!` | `.env` → `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
 | PostgreSQL | `mlflow` | `mlflow-s3cr3t!` | `.env` → `POSTGRES_USER` / `POSTGRES_PASSWORD` |
+| LocalAI | API key | `change-me-to-a-localai-key` | `.env` → `LOCALAI_API_KEY` |
+| Open WebUI | `admin@local.dev` | `change-me` | `.env` → `OPENWEBUI_ADMIN_EMAIL` / `OPENWEBUI_ADMIN_PASSWORD` |
 | Traefik Dashboard | `admin` | `admin` | `volumes/traefik/dynamic/config.yml` → `basic-auth` middleware |
 
 > **MLflow note:** MLflow v3.10+ requires passwords of at least 13 characters.
@@ -261,6 +265,214 @@ with mlflow.start_run():
 
 ---
 
+## LocalAI (OpenAI-compatible Model Server)
+
+[LocalAI](https://localai.io/) provides an OpenAI-compatible API for running LLMs locally.
+It supports model auto-unloading and memory-safe single-model mode.
+
+### Key Features
+
+- **API key authentication** — all requests require `Authorization: Bearer <key>`
+- **Idle watchdog** — automatically unloads models after `LOCALAI_WATCHDOG_IDLE_TIMEOUT` (default: 15 min)
+- **Single-model mode** — `LOCALAI_MAX_ACTIVE_BACKENDS=1` ensures only one model is loaded at a time (LRU eviction)
+- **Busy watchdog** — kills stuck backends after `LOCALAI_WATCHDOG_BUSY_TIMEOUT` (default: 5 min)
+- **Built-in web UI** — browse and manage models at `https://localai.local.dev`
+
+### GPU Support
+
+The default image is CPU-only (`localai/localai:latest-cpu`). For NVIDIA GPU acceleration:
+
+1. Change `.env`:
+   ```bash
+   LOCALAI_IMAGE_TAG=latest-gpu-nvidia-cuda-12
+   ```
+2. Uncomment the `deploy.resources.reservations` block in `docker-compose.yml` under the `localai` service.
+
+> **Apple Silicon note:** The `latest-cpu` image is `linux/amd64` and runs under Rosetta emulation.
+> Some backends (llama-cpp AVX2/AVX512) may not work. Use the `llama-cpp-fallback` binary or
+> consider using Ollama natively on the host for ARM Macs.
+
+### Adding Models
+
+There are three ways to add models:
+
+#### Option 1: LocalAI Web Gallery (easiest)
+
+1. Open `https://localai.local.dev` in your browser
+2. Browse the model gallery and click **Install** on any model
+3. The model is downloaded and configured automatically
+4. Models persist in `volumes/localai/models/` across restarts
+
+#### Option 2: Download a GGUF file + write a YAML config (offline-friendly)
+
+This is the recommended approach for air-gapped / offline deployments.
+
+**Step 1 — Download a GGUF model file:**
+
+```bash
+# Example: download Gemma 3 1B from HuggingFace
+curl -L -o volumes/localai/models/gemma-3-1b-it-Q4_K_M.gguf \
+  "https://huggingface.co/bartowski/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf"
+```
+
+> Use `-Q4_K_M` or `-Q5_K_M` quantisations for a good balance of quality and size.
+
+**Step 2 — Create a model config YAML:**
+
+Create a file in `volumes/localai/models/` with the model name as the filename
+(e.g. `gemma-3-1b-it.yaml`):
+
+```yaml
+name: gemma-3-1b-it
+backend: llama-cpp
+parameters:
+  model: gemma-3-1b-it-Q4_K_M.gguf
+context_size: 8192
+template:
+  chat_message: |
+    <start_of_turn>{{.RoleName}}
+    {{.Content}}<end_of_turn>
+  chat: |
+    {{.Input}}
+    <start_of_turn>model
+stopwords:
+  - <end_of_turn>
+  - <start_of_turn>
+```
+
+**Model config reference:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Model name used in API calls (`"model": "gemma-3-1b-it"`) |
+| `backend` | Yes | Inference backend — usually `llama-cpp` for GGUF models |
+| `parameters.model` | Yes | Filename of the GGUF file (must be in the same `models/` directory) |
+| `context_size` | No | Max context window in tokens (default: value from `.env` `LOCALAI_CONTEXT_SIZE`) |
+| `template.chat_message` | No | Go template for each message. Use `{{.RoleName}}` and `{{.Content}}` |
+| `template.chat` | No | Go template wrapping the full conversation. `{{.Input}}` = all messages |
+| `stopwords` | No | Tokens that signal the model to stop generating |
+| `threads` | No | Override CPU threads for this model (default: `LOCALAI_THREADS`) |
+| `gpu_layers` | No | Number of layers to offload to GPU (requires GPU image) |
+
+> **Chat templates vary per model family.** Check the model's HuggingFace page or
+> `tokenizer_config.json` for the correct format. Common templates:
+> - **Gemma/Gemma 3:** `<start_of_turn>role\n...<end_of_turn>`
+> - **Llama 3/3.1:** `<|begin_of_text|><|start_header_id|>role<|end_header_id|>...<|eot_id|>`
+> - **Mistral/Mixtral:** `[INST] ... [/INST]`
+> - **Phi-3/4:** `<|user|>\n...<|end|>\n<|assistant|>`
+
+**Step 3 — Restart LocalAI to pick up the new model:**
+
+```bash
+docker compose restart localai
+```
+
+#### Option 3: Install via the API
+
+```bash
+# Install from HuggingFace via the gallery API
+curl -sk -H "Authorization: Bearer $LOCALAI_API_KEY" \
+  https://localai.local.dev/models/apply \
+  -d '{"id": "huggingface://bartowski/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf"}'
+```
+
+### Verifying Models
+
+```bash
+# List installed models
+curl -sk -H "Authorization: Bearer $LOCALAI_API_KEY" \
+  https://localai.local.dev/v1/models | python3 -m json.tool
+
+# Test chat completion
+curl -sk -H "Authorization: Bearer $LOCALAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  https://localai.local.dev/v1/chat/completions \
+  -d '{
+    "model": "gemma-3-1b-it",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+### Memory Management
+
+| Setting | Env Var | Default | Effect |
+|---------|---------|---------|--------|
+| Max loaded models | `LOCALAI_MAX_ACTIVE_BACKENDS` | `1` | LRU eviction when limit reached |
+| Idle timeout | `LOCALAI_WATCHDOG_IDLE_TIMEOUT` | `15m` | Unload idle models automatically |
+| Busy timeout | `LOCALAI_WATCHDOG_BUSY_TIMEOUT` | `5m` | Kill stuck inference backends |
+
+---
+
+## Open WebUI (Chat Interface)
+
+[Open WebUI](https://docs.openwebui.com/) provides a ChatGPT-like interface
+that connects to both **LocalAI** and **Ollama** running on the host.
+
+### Login
+
+An admin account is **auto-created on first launch** from the `.env` file:
+
+| Setting | Env Var | Default |
+|---------|---------|---------|
+| Email (login) | `OPENWEBUI_ADMIN_EMAIL` | `admin@local.dev` |
+| Password | `OPENWEBUI_ADMIN_PASSWORD` | `change-me` |
+| Display name | `OPENWEBUI_ADMIN_NAME` | `Admin` |
+
+1. Open `https://chat.local.dev`
+2. Log in with the email and password above
+3. Models from LocalAI (and Ollama if running) appear in the model dropdown
+
+> Public signup is disabled (`ENABLE_INITIAL_ADMIN_SIGNUP=False`).
+> Additional users can be created by the admin from **Admin Panel → Users**.
+
+### API Key Access
+
+API key generation is enabled. To create an API key:
+
+1. Log in to Open WebUI at `https://chat.local.dev`
+2. Go to **Settings → Account → API Keys**
+3. Click **Create new API key**
+
+Use the key with the OpenAI-compatible API:
+
+```bash
+curl -sk -H "Authorization: Bearer <your-openwebui-api-key>" \
+  -H "Content-Type: application/json" \
+  https://chat.local.dev/api/chat/completions \
+  -d '{
+    "model": "gemma-3-1b-it",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+### Backend Connections
+
+| Backend | How it connects | Config |
+|---------|----------------|--------|
+| **LocalAI** | `http://localai:8080/v1` (Docker network) | `OPENAI_API_BASE_URL` + `OPENAI_API_KEY` in compose |
+| **Ollama** (host) | `http://host.docker.internal:11434` | `OLLAMA_BASE_URL` in `.env` |
+
+Both backends are enabled by default. Models from both appear in the Open WebUI dropdown.
+
+### Offline Mode
+
+Open WebUI runs with `OFFLINE_MODE=true` — no HuggingFace Hub downloads or version
+checks are made at startup. This makes it suitable for air-gapped deployments.
+
+> If you need RAG/embedding features, pre-cache the `sentence-transformers/all-MiniLM-L6-v2`
+> model in `volumes/open-webui/cache/` before going offline, or disable `OFFLINE_MODE`.
+
+### Disabling a Backend
+
+To use only LocalAI (no Ollama), set in `.env`:
+```bash
+OLLAMA_BASE_URL=
+```
+
+To use only Ollama (no LocalAI), remove or comment out the `open-webui` and `localai` services.
+
+---
+
 ## Security Considerations
 
 ### Secrets Encryption
@@ -303,6 +515,7 @@ MLflow's auth DB is stored in the same PostgreSQL instance as the tracking metad
 
 - [ ] Change all default passwords in `.env` and `volumes/mlflow/basic_auth.ini`
 - [ ] Generate unique `MLFLOW_FLASK_SERVER_SECRET_KEY` and `MLFLOW_CRYPTO_KEK_PASSPHRASE`
+- [ ] Generate unique `LOCALAI_API_KEY` and `OPENWEBUI_SECRET_KEY`
 - [ ] Generate a new Traefik basicAuth hash and update `volumes/traefik/dynamic/config.yml`
 - [ ] Switch to real TLS certificates (see below)
 - [ ] Restrict network access — don't expose MinIO or PostgreSQL ports externally
@@ -840,6 +1053,9 @@ volumes/
 ├── minio/                 # MinIO object storage
 ├── mlflow/
 │   └── basic_auth.ini     # MLflow auth config
+├── localai/
+│   └── models/            # LocalAI model files & YAML configs
+├── open-webui/            # Open WebUI data (SQLite DB, uploads, cache)
 └── traefik/
     ├── traefik.yml        # Traefik static config
     ├── dynamic/
@@ -859,29 +1075,22 @@ To start fresh: `docker compose down -v && rm -rf volumes/postgres volumes/minio
          :80/:443  │   Traefik    │
   User ──────────► │  (reverse    │
                     │   proxy)     │
-                    └──┬───┬───┬──┘
-                       │   │   │
-          ┌────────────┘   │   └────────────┐
-          ▼                ▼                ▼
-   ┌────────────┐   ┌────────────┐   ┌────────────┐
-   │   MLflow   │   │   MinIO    │   │   MinIO    │
-   │  :5000     │   │  Console   │   │  S3 API    │
-   │ (built-in  │   │  :9001     │   │  :9000     │
-   │  auth +    │   └─────┬──────┘   └─────┬──────┘
-   │  AI Gateway│         │                │
-   │  + GenAI)  │         └────────┬───────┘
-   └─────┬──────┘                  │
-         │                         │
-         ▼                         ▼
-   ┌────────────┐           ┌────────────┐
-   │ PostgreSQL │           │   MinIO    │
-   │  :5432     │           │  /data     │
-   └────────────┘           └────────────┘
-                                   ▲
-                                   │
-                            ┌────────────┐
-                            │  Ollama    │
-                            │ (host)     │
-                            │ :11434     │
+                    └──┬──┬──┬──┬──┬┘
+                       │  │  │  │  │
+       ┌───────────┘  │  │  │  └────────────┐
+       │     ┌────────┘  │  └────────┐     │
+       ▼     ▼           ▼        ▼     ▼
+ ┌────────┐┌────────┐┌────────┐┌───────┐┌────────┐
+ │ MLflow ││ MinIO  ││ MinIO  ││LocalAI││  Open  │
+ │ :5000  ││Console ││ S3 API ││ :8080 ││ WebUI  │
+ │(auth + ││ :9001  ││ :9000  ││(models││ :8080  │
+ │ AI GW) │└───┬────┘└───┬────┘│ +API) │└───┬────┘
+ └───┬────┘    │        │   └───┬───┘    │
+      │        └────┬───┘       │        │
+      ▼             ▼          ▼        ▼
+ ┌────────┐   ┌────────┐   ┌────────────┐
+ │Postgres│   │  MinIO │   │   Ollama    │
+ │ :5432  │   │  /data │   │   (host)    │
+ └────────┘   └────────┘   │  :11434    │
                             └────────────┘
 ```

@@ -7,6 +7,8 @@
 #   minio          – S3-compatible artifact store
 #   create-bucket  – One-shot init container to create the S3 bucket
 #   mlflow         – Tracking server with GenAI & basic-auth enabled
+#   localai        – OpenAI-compatible local model server
+#   open-webui     – Chat UI frontend for LocalAI + Ollama
 # ============================================================================
 
 name: mlflow-quick-stack
@@ -154,6 +156,86 @@ services:
       - mlflow-network
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${MLFLOW_PORT}/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── LocalAI (OpenAI-compatible model server) ─────────────────────────────
+  localai:
+    image: localai/localai:${LOCALAI_IMAGE_TAG:-latest-cpu}
+    container_name: localai
+    restart: unless-stopped
+    environment:
+      LOCALAI_API_KEY: ${LOCALAI_API_KEY}
+      LOCALAI_THREADS: ${LOCALAI_THREADS:-4}
+      LOCALAI_CONTEXT_SIZE: ${LOCALAI_CONTEXT_SIZE:-2048}
+      # Idle watchdog — auto-unload models after timeout
+      LOCALAI_WATCHDOG_IDLE: "true"
+      LOCALAI_WATCHDOG_IDLE_TIMEOUT: ${LOCALAI_WATCHDOG_IDLE_TIMEOUT:-15m}
+      LOCALAI_WATCHDOG_BUSY: "true"
+      LOCALAI_WATCHDOG_BUSY_TIMEOUT: ${LOCALAI_WATCHDOG_BUSY_TIMEOUT:-5m}
+      # Memory safety — only one model loaded at a time (LRU eviction)
+      LOCALAI_MAX_ACTIVE_BACKENDS: ${LOCALAI_MAX_ACTIVE_BACKENDS:-1}
+      LOCALAI_CORS: "true"
+    volumes:
+      - ./volumes/localai/models:/build/models
+    ports:
+      - "${LOCALHOST_LOCALAI_PORT:-8080}:8080"
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/readyz"]
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 60s
+    # ── NVIDIA GPU support (uncomment to enable) ──
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ── Open WebUI (Chat interface) ────────────────────────────────────────────
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    depends_on:
+      localai:
+        condition: service_healthy
+    environment:
+      # Connect to LocalAI as an OpenAI-compatible backend
+      OPENAI_API_BASE_URL: "http://localai:8080/v1"
+      OPENAI_API_KEY: ${LOCALAI_API_KEY}
+      # Also connect to host Ollama (both backends available in the UI)
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      # Auth & security
+      WEBUI_SECRET_KEY: ${OPENWEBUI_SECRET_KEY}
+      WEBUI_AUTH: "True"
+      # Auto-create admin account on first launch (no manual signup needed)
+      WEBUI_ADMIN_EMAIL: ${OPENWEBUI_ADMIN_EMAIL:-admin@local.dev}
+      WEBUI_ADMIN_PASSWORD: ${OPENWEBUI_ADMIN_PASSWORD:-change-me}
+      WEBUI_ADMIN_NAME: ${OPENWEBUI_ADMIN_NAME:-Admin}
+      ENABLE_INITIAL_ADMIN_SIGNUP: "False"
+      # Allow users to generate API keys
+      ENABLE_API_KEYS: "True"
+      USER_PERMISSIONS_FEATURES_API_KEYS: "True"
+      # Offline mode — no HuggingFace downloads or version checks
+      OFFLINE_MODE: "true"
+    volumes:
+      - ./volumes/open-webui:/app/backend/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${LOCALHOST_OPENWEBUI_PORT:-3000}:8080"
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 15s
       timeout: 5s
       retries: 10

@@ -14,6 +14,8 @@ DOMAINS=(
   "minio.local.dev"
   "s3.local.dev"
   "traefik.local.dev"
+  "localai.local.dev"
+  "chat.local.dev"
 )
 
 MARKER="# mlflow-quick-stack"
@@ -34,6 +36,8 @@ add_entries() {
   echo "  https://minio.local.dev"
   echo "  https://s3.local.dev"
   echo "  https://traefik.local.dev"
+  echo "  https://localai.local.dev"
+  echo "  https://chat.local.dev"
 }
 
 remove_entries() {

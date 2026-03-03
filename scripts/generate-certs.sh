@@ -20,7 +20,7 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout "${CERT_DIR}/local-key.pem" \
   -out "${CERT_DIR}/local-cert.pem" \
   -subj "/CN=${DOMAIN}" \
-  -addext "subjectAltName=DNS:*.${DOMAIN},DNS:${DOMAIN},DNS:mlflow.${DOMAIN},DNS:minio.${DOMAIN},DNS:s3.${DOMAIN},DNS:traefik.${DOMAIN}"
+  -addext "subjectAltName=DNS:*.${DOMAIN},DNS:${DOMAIN},DNS:mlflow.${DOMAIN},DNS:minio.${DOMAIN},DNS:s3.${DOMAIN},DNS:traefik.${DOMAIN},DNS:localai.${DOMAIN},DNS:chat.${DOMAIN}"
 
 chmod 600 "${CERT_DIR}/local-key.pem"
 

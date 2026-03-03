@@ -8,6 +8,13 @@ volumes/traefik/certs/*
 !volumes/traefik/certs/.gitkeep
 volumes/traefik/acme/*
 !volumes/traefik/acme/.gitkeep
+volumes/localai/*
+!volumes/localai/.gitkeep
+!volumes/localai/models
+volumes/localai/models/*
+!volumes/localai/models/*.yaml
+volumes/open-webui/*
+!volumes/open-webui/.gitkeep
 
 # Saved Docker images (large .tar files)
 images/*

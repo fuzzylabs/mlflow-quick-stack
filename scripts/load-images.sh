@@ -38,6 +38,8 @@ EXPECTED=(
   "postgres:18"
   "quay.io/minio/minio:latest"
   "quay.io/minio/mc:latest"
+  "localai/localai:latest-cpu"
+  "ghcr.io/open-webui/open-webui:main"
   "mlflow-quick-stack:latest"
 )
 

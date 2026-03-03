@@ -1,0 +1,15 @@
+name: gemma-3-1b-it
+backend: llama-cpp
+parameters:
+  model: gemma-3-1b-it-Q4_K_M.gguf
+context_size: 8192
+template:
+  chat_message: |
+    <start_of_turn>{{.RoleName}}
+    {{.Content}}<end_of_turn>
+  chat: |
+    {{.Input}}
+    <start_of_turn>model
+stopwords:
+  - <end_of_turn>
+  - <start_of_turn>

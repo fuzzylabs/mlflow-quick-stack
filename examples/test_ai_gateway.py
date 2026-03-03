@@ -74,7 +74,7 @@ results["health"] = True
 # POST /gateway/<endpoint-name>/mlflow/invocations
 # This is the native MLflow gateway route. Supports seamless model switching.
 
-print(f"[2/4] Testing MLflow Invocations API...")
+print("[2/4] Testing MLflow Invocations API...")
 print(f"      POST {BASE}/gateway/{ENDPOINT_NAME}/mlflow/invocations")
 
 resp = session.post(
@@ -101,7 +101,7 @@ results["invocations_api"] = True
 # Set the endpoint name as the "model" parameter.
 # Compatible with the OpenAI Python SDK.
 
-print(f"[3/4] Testing OpenAI-compatible Chat Completions API...")
+print("[3/4] Testing OpenAI-compatible Chat Completions API...")
 print(f"      POST {BASE}/gateway/mlflow/v1/chat/completions")
 
 try:
@@ -144,10 +144,9 @@ except ImportError:
 #
 # Uses mlflow.deployments.get_deploy_client("mlflow") with client.predict()
 
-print(f"[4/4] Testing MLflow Python SDK (deployments client)...")
+print("[4/4] Testing MLflow Python SDK (deployments client)...")
 
 try:
-    import mlflow
     from mlflow.deployments import get_deploy_client
 
     deploy_client = get_deploy_client(MLFLOW_TRACKING_URI)
@@ -176,10 +175,10 @@ except Exception as e:
     # the integrated gateway (MLflow 3.x).  The REST APIs above cover
     # the same functionality.
     print(f"      SDK error: {e}")
-    print(f"      Note: The MLflow deployments SDK uses /endpoints/ routes")
-    print(f"            which may differ from /gateway/ routes served by the")
-    print(f"            integrated AI Gateway. Use the Invocations API or")
-    print(f"            OpenAI-compatible API instead.")
+    print("      Note: The MLflow deployments SDK uses /endpoints/ routes")
+    print("            which may differ from /gateway/ routes served by the")
+    print("            integrated AI Gateway. Use the Invocations API or")
+    print("            OpenAI-compatible API instead.")
     results["sdk"] = "skipped"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
