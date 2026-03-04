@@ -2,13 +2,16 @@
 # MLflow Quick Stack — Docker Compose
 # ============================================================================
 # Services:
-#   traefik        – HTTPS reverse proxy (ports 80 → 443 redirect, 443 TLS)
-#   postgres       – Backend metadata store + MLflow auth DB
-#   minio          – S3-compatible artifact store
-#   create-bucket  – One-shot init container to create the S3 bucket
-#   mlflow         – Tracking server with GenAI & basic-auth enabled
-#   localai        – OpenAI-compatible local model server
-#   open-webui     – Chat UI frontend for LocalAI + Ollama
+#   traefik              – HTTPS reverse proxy (ports 80 → 443 redirect, 443 TLS)
+#   postgres             – Backend metadata store + MLflow auth DB
+#   minio                – S3-compatible artifact store
+#   create-bucket        – One-shot init container to create the S3 buckets
+#   mlflow               – Tracking server with GenAI & basic-auth enabled
+#   localai              – OpenAI-compatible local model server
+#   open-webui           – Chat UI frontend for LocalAI + Ollama
+#   label-studio-postgres – PostgreSQL for Label Studio
+#   label-studio         – Data labeling platform (annotation UI)
+#   label-studio-ml      – LLM ML backend bridging Label Studio ↔ LocalAI
 # ============================================================================
 
 name: mlflow-quick-stack
@@ -92,6 +95,7 @@ services:
       S3_BUCKET_QUANTIZED_MODELS: ${S3_BUCKET_QUANTIZED_MODELS}
       S3_BUCKET_FULL_PRECISION_MODELS: ${S3_BUCKET_FULL_PRECISION_MODELS}
       S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS}
+      S3_BUCKET_LABELSTUDIO: ${S3_BUCKET_LABELSTUDIO}
     entrypoint: >
       /bin/sh -c "
         mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
@@ -99,7 +103,8 @@ services:
         mc mb --ignore-existing myminio/$${S3_BUCKET_QUANTIZED_MODELS} &&
         mc mb --ignore-existing myminio/$${S3_BUCKET_FULL_PRECISION_MODELS} &&
         mc mb --ignore-existing myminio/$${S3_BUCKET_DATASETS} &&
-        echo 'Buckets ready: '$${S3_BUCKET_MLFLOW}', '$${S3_BUCKET_QUANTIZED_MODELS}', '$${S3_BUCKET_FULL_PRECISION_MODELS}', '$${S3_BUCKET_DATASETS}
+        mc mb --ignore-existing myminio/$${S3_BUCKET_LABELSTUDIO} &&
+        echo 'Buckets ready: '$${S3_BUCKET_MLFLOW}', '$${S3_BUCKET_QUANTIZED_MODELS}', '$${S3_BUCKET_FULL_PRECISION_MODELS}', '$${S3_BUCKET_DATASETS}', '$${S3_BUCKET_LABELSTUDIO}
       "
     networks:
       - mlflow-network
@@ -239,6 +244,111 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
+      start_period: 30s
+
+  # ── Label Studio PostgreSQL ──────────────────────────────────────────────
+  label-studio-postgres:
+    image: postgres:18
+    container_name: label-studio-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LABELSTUDIO_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${LABELSTUDIO_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${LABELSTUDIO_POSTGRES_DB}
+    volumes:
+      - ./volumes/label-studio/postgres:/var/lib/postgresql
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LABELSTUDIO_POSTGRES_USER} -d ${LABELSTUDIO_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Label Studio (Data Labeling Platform) ──────────────────────────────────
+  label-studio:
+    image: heartexlabs/label-studio:latest
+    platform: linux/amd64
+    container_name: label-studio
+    restart: unless-stopped
+    depends_on:
+      label-studio-postgres:
+        condition: service_healthy
+    environment:
+      # Database
+      DJANGO_DB: default
+      POSTGRE_NAME: ${LABELSTUDIO_POSTGRES_DB}
+      POSTGRE_USER: ${LABELSTUDIO_POSTGRES_USER}
+      POSTGRE_PASSWORD: ${LABELSTUDIO_POSTGRES_PASSWORD}
+      POSTGRE_HOST: label-studio-postgres
+      POSTGRE_PORT: "5432"
+      # Admin account (auto-created on first launch)
+      LABEL_STUDIO_USERNAME: ${LABELSTUDIO_ADMIN_EMAIL}
+      LABEL_STUDIO_PASSWORD: ${LABELSTUDIO_ADMIN_PASSWORD}
+      LABEL_STUDIO_USER_TOKEN: ${LABELSTUDIO_USER_TOKEN}
+      # Security
+      LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK: "true"
+      # External URL (for correct links in emails, webhooks, etc.)
+      LABEL_STUDIO_HOST: "https://${LABELSTUDIO_DOMAIN}"
+      CSRF_TRUSTED_ORIGINS: "https://${LABELSTUDIO_DOMAIN}"
+      # Local file serving (for imported files)
+      LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED: "true"
+      LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT: /label-studio/data/files
+      # Increase ML backend timeout for slow CPU inference (LocalAI)
+      ML_TIMEOUT_PREDICT: "300"
+      ML_CONNECTION_TIMEOUT: "10"
+    volumes:
+      - ./volumes/label-studio/app:/label-studio/data
+    ports:
+      - "${LOCALHOST_LABELSTUDIO_PORT:-8085}:8080"
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ── Label Studio ML Backend (LLM Interactive) ──────────────────────────────
+  label-studio-ml:
+    image: heartexlabs/label-studio-ml-backend:llm-master
+    platform: linux/amd64
+    container_name: label-studio-ml
+    restart: unless-stopped
+    depends_on:
+      localai:
+        condition: service_healthy
+      label-studio:
+        condition: service_healthy
+    environment:
+      # OpenAI-compatible provider (LocalAI)
+      OPENAI_PROVIDER: openai
+      OPENAI_API_KEY: ${LOCALAI_API_KEY}
+      OPENAI_BASE_URL: "http://localai:8080/v1"
+      OPENAI_MODEL: ${LABELSTUDIO_ML_MODEL:-gemma-3-1b-it}
+      # Prompt configuration
+      USE_INTERNAL_PROMPT_TEMPLATE: "1"
+      PROMPT_PREFIX: prompt
+      PROMPT_TEMPLATE: "You are a helpful AI assistant. Given the following context, answer the question accurately and concisely.\n\n--- Context ---\n{text}\n\n--- Question ---\n{prompt}\n\n--- Answer ---"
+      TEMPERATURE: "0.7"
+      NUM_RESPONSES: "1"
+      # Label Studio connection
+      LABEL_STUDIO_URL: "http://label-studio:8080"
+      LABEL_STUDIO_API_KEY: ${LABELSTUDIO_USER_TOKEN}
+      # Logging
+      LOG_LEVEL: INFO
+    volumes:
+      - ./volumes/label-studio/ml:/data
+    ports:
+      - "${LOCALHOST_LABELSTUDIO_ML_PORT:-9090}:9090"
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
       start_period: 30s
 
 networks:

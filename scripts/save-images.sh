@@ -22,6 +22,8 @@ IMAGES=(
   "quay.io/minio/mc:latest"
   "localai/localai:latest-cpu"
   "ghcr.io/open-webui/open-webui:main"
+  "heartexlabs/label-studio:latest"
+  "heartexlabs/label-studio-ml-backend:llm-master"
   "mlflow-quick-stack:latest"
 )
 

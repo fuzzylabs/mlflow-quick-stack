@@ -9,6 +9,7 @@ A single `docker compose up` to get a production-shaped MLflow platform with:
 | **MinIO** | S3-compatible artifact storage | Console: `https://minio.local.dev` / API: `https://s3.local.dev` |
 | **LocalAI** | OpenAI-compatible local model server | `https://localai.local.dev` |
 | **Open WebUI** | Chat UI for LocalAI + Ollama models | `https://chat.local.dev` |
+| **Label Studio** | Data labeling platform with LLM-assisted annotation | `https://label-studio.local.dev` |
 | **Traefik v3** | HTTPS reverse proxy | Dashboard: `https://traefik.local.dev` |
 
 All traffic goes through Traefik on ports **80** (→ redirect) and **443** (TLS).  
@@ -78,6 +79,8 @@ open https://mlflow.local.dev   # MLflow UI — login with admin / admin-s3cr3t!
 | PostgreSQL | `mlflow` | `mlflow-s3cr3t!` | `.env` → `POSTGRES_USER` / `POSTGRES_PASSWORD` |
 | LocalAI | API key | `change-me-to-a-localai-key` | `.env` → `LOCALAI_API_KEY` |
 | Open WebUI | `admin@local.dev` | `change-me` | `.env` → `OPENWEBUI_ADMIN_EMAIL` / `OPENWEBUI_ADMIN_PASSWORD` |
+| Label Studio | `admin@local.dev` | `change-me-label-studio` | `.env` → `LABELSTUDIO_ADMIN_EMAIL` / `LABELSTUDIO_ADMIN_PASSWORD` |
+| Label Studio PG | `labelstudio` | `ls-s3cr3t!` | `.env` → `LABELSTUDIO_POSTGRES_USER` / `LABELSTUDIO_POSTGRES_PASSWORD` |
 | Traefik Dashboard | `admin` | `admin` | `volumes/traefik/dynamic/config.yml` → `basic-auth` middleware |
 
 > **MLflow note:** MLflow v3.10+ requires passwords of at least 13 characters.
@@ -470,6 +473,371 @@ OLLAMA_BASE_URL=
 ```
 
 To use only Ollama (no LocalAI), remove or comment out the `open-webui` and `localai` services.
+
+---
+
+## Label Studio (Data Labeling Platform)
+
+[Label Studio](https://labelstud.io/) is an open-source data labeling platform. In this stack it is
+integrated with **LocalAI** (via an LLM ML backend) for AI-assisted annotation and with **MinIO**
+for S3-based import/export storage.
+
+### Architecture
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌───────────────┐
+│  Label Studio  │ →→→ │  ML Backend     │ →→→ │    LocalAI    │
+│  (annotation)  │     │  (llm-master)  │     │  (inference)  │
+└────────┬────────┘     └──────────────────┘     └───────────────┘
+         │                                            │
+         │  ┌───────────────┐   ┌───────────────┐    │
+         └──│    MinIO      │   │  PostgreSQL  │    │
+            │  (S3 storage) │   │  (LS data)   │    │
+            └───────────────┘   └───────────────┘
+```
+
+Three containers run together:
+- **label-studio** — the web UI and API (`heartexlabs/label-studio:latest`)
+- **label-studio-ml** — the LLM-powered ML backend (`heartexlabs/label-studio-ml-backend:llm-master`)
+- **label-studio-postgres** — a separate PostgreSQL 18 instance for Label Studio data
+
+### Step 1 — Log In
+
+An admin account is auto-created on first launch:
+
+| Setting | Env Var | Default |
+|---------|---------|--------|
+| Email (login) | `LABELSTUDIO_ADMIN_EMAIL` | `admin@local.dev` |
+| Password | `LABELSTUDIO_ADMIN_PASSWORD` | `change-me-label-studio` |
+| API Token | `LABELSTUDIO_USER_TOKEN` | `label-studio-api-token` |
+
+Open `https://label-studio.local.dev` and log in with the email/password above.
+
+Public signup is disabled (`LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=true`).
+
+### Step 2 — Create a Project
+
+1. Click **Create Project** on the dashboard
+2. Give it a name (e.g. "Q&A Pair Generation" or "Text Classification")
+3. Under **Labeling Setup**, choose a template or paste a custom one (see
+   [Labeling Templates](#labeling-templates) below)
+4. Click **Save**
+
+### Step 3 — Connect S3 Storage (MinIO)
+
+A dedicated `label-studio` S3 bucket is created automatically. To connect it
+as import/export storage:
+
+1. Go to **Project Settings → Cloud Storage**
+2. Click **Add Source Storage** → **Amazon S3**:
+   - **Bucket**: `label-studio` (or `datasets` for existing data)
+   - **Prefix**: e.g. `input/` (optional — organises files within the bucket)
+   - **S3 Endpoint**: `http://minio:9000`
+   - **Access Key ID**: `minioadmin`
+   - **Secret Access Key**: `minio-s3cr3t!`
+   - **Region**: `us-east-1`
+   - **Use pre-signed URLs**: checked
+   - **Treat every bucket object as a source file**: checked (for importing all files)
+3. Click **Add Target Storage** to export annotations back to MinIO:
+   - Same bucket/credentials, different prefix (e.g. `output/`)
+
+> **Tip — configure storage via the API:**
+> ```bash
+> curl -sk -H "Authorization: Token label-studio-api-token" \
+>   https://label-studio.local.dev/api/storages/s3/ \
+>   -H "Content-Type: application/json" \
+>   -d '{
+>     "project": 1,
+>     "bucket": "label-studio",
+>     "prefix": "input/",
+>     "aws_access_key_id": "minioadmin",
+>     "aws_secret_access_key": "minio-s3cr3t!",
+>     "s3_endpoint": "http://minio:9000",
+>     "region_name": "us-east-1",
+>     "use_blob_urls": true,
+>     "presign": true
+>   }'
+> ```
+
+**Alternatively**, you can skip S3 and import data directly:
+- Upload JSON/CSV files via the **Import** tab in the project
+- Paste raw JSON into the import dialog
+
+### Step 4 — Connect the LLM ML Backend
+
+The `label-studio-ml` service runs an LLM-powered ML backend that bridges
+Label Studio and LocalAI. It starts automatically and uses the model
+configured by `LABELSTUDIO_ML_MODEL` (default: `gemma-3-1b-it`).
+
+1. Go to **Project Settings → Model**
+2. Click **Connect Model**
+3. Enter the backend URL: `http://label-studio-ml:9090`
+4. Enable the **Interactive preannotations** toggle
+5. Click **Validate and Save**
+
+> The ML backend is only needed for LLM-assisted workflows (Q&A generation,
+> text classification with LLM, etc.). You can skip this step for purely manual
+> labeling tasks.
+
+### Step 5 — Import Data
+
+Upload your dataset. The format depends on the labeling template you chose.
+A few examples:
+
+**Text tasks** (Q&A, classification, NER):
+```json
+[
+  {"text": "Machine learning is a subset of AI..."},
+  {"text": "Docker containers package applications..."}
+]
+```
+
+**Text tasks with pre-filled prompts** (for LLM-assisted Q&A):
+```json
+[
+  {
+    "text": "Machine learning is a subset of artificial intelligence...",
+    "prompt": "Explain the key differences between supervised and unsupervised ML."
+  },
+  {
+    "text": "Docker containers package applications with their dependencies...",
+    "prompt": "What are the main advantages of containers over virtual machines?"
+  }
+]
+```
+
+**Image tasks** (classification, object detection):
+```json
+[
+  {"image": "https://s3.local.dev/datasets/images/photo_001.jpg"},
+  {"image": "https://s3.local.dev/datasets/images/photo_002.jpg"}
+]
+```
+
+Or connect MinIO source storage (Step 3) and click **Sync Storage** to pull tasks
+automatically.
+
+### Step 6 — Start Labeling
+
+1. Open the project and click **Label All Tasks**
+2. For **LLM-assisted labeling** (Q&A generation, auto-classification):
+   - **Enable Auto-Annotation** — click the toggle at the bottom of the labeling
+     interface (required once per session for interactive ML predictions)
+   - Type or edit the prompt, then press **Shift+Enter**
+   - Wait 10–60 s (CPU inference) — a "Generating response…" overlay appears
+   - The LLM response populates the response field
+3. For **manual labeling** (NER, classification, bounding boxes):
+   - Select labels and annotate regions as usual
+4. Review, edit if needed, and click **Submit**
+
+### Step 7 — Export Annotations
+
+Export via the UI (**Export** button in the project), or via the API:
+
+```bash
+curl -sk -H "Authorization: Token label-studio-api-token" \
+  https://label-studio.local.dev/api/projects/1/export?exportType=JSON \
+  | python3 -m json.tool
+```
+
+Supported formats: JSON, JSON-MIN, CSV, TSV, CONLL2003, COCO, Pascal VOC,
+Brush (PNG masks), and more.
+
+Or sync to MinIO **Target Storage** for automated export pipelines.
+
+---
+
+### Labeling Templates
+
+Label Studio uses XML labeling configs to define the annotation interface.
+Below are ready-to-use templates for common tasks. Paste them into
+**Labeling Setup → Custom template** when creating a project.
+
+#### LLM-Assisted Q&A Pair Generation
+
+Generate question-answer pairs with LLM responses. Each task needs a `text`
+field (context) and optionally a `prompt` field (pre-filled question).
+
+```xml
+<View>
+    <Style>
+        .lsf-main-content.lsf-requesting .prompt::before {
+            content: 'Generating response...';
+            color: #808080;
+        }
+    </Style>
+    <Header value="Context:"/>
+    <View className="text-container">
+        <Text name="context" value="$text"/>
+    </View>
+    <Header value="Question / Prompt:"/>
+    <View className="prompt">
+        <TextArea name="prompt" toName="context" rows="4" editable="true"
+                  maxSubmissions="1" showSubmitButton="false"
+                  value="$prompt"
+                  placeholder="Edit the prompt or type a new one, then press Shift+Enter..."/>
+    </View>
+    <Header value="LLM Response:"/>
+    <TextArea name="response" toName="context" rows="4" editable="true"
+              maxSubmissions="1" showSubmitButton="false" smart="false"
+              placeholder="AI-generated response will appear here..."/>
+    <Header value="Response quality:"/>
+    <Rating name="rating" toName="context"/>
+</View>
+```
+
+> **Note:** The `value="$prompt"` attribute pre-fills the prompt from the task data.
+> Annotators can edit it before pressing Shift+Enter. If your tasks don't have
+> a `prompt` field, remove the `value` attribute and annotators will type prompts
+> from scratch.
+
+**Prompt template:** The ML backend wraps each request with the `PROMPT_TEMPLATE`
+env var before sending to the LLM. The default template is:
+
+```
+You are a helpful AI assistant. Given the following context, answer the
+question accurately and concisely.
+
+--- Context ---
+{text}
+
+--- Question ---
+{prompt}
+
+--- Answer ---
+```
+
+You can customise this in `docker-compose.yml` under the `label-studio-ml`
+service's `PROMPT_TEMPLATE` environment variable.
+
+#### Text Classification
+
+Classify text into categories. Each task needs a `text` field.
+
+```xml
+<View>
+    <Text name="text" value="$text"/>
+    <Choices name="sentiment" toName="text" choice="single" showInline="true">
+        <Choice value="Positive"/>
+        <Choice value="Negative"/>
+        <Choice value="Neutral"/>
+    </Choices>
+</View>
+```
+
+Data format: `[{"text": "This product is great!"}]`
+
+#### Named Entity Recognition (NER)
+
+Highlight and label spans of text. Each task needs a `text` field.
+
+```xml
+<View>
+    <Labels name="label" toName="text">
+        <Label value="Person" background="red"/>
+        <Label value="Organization" background="blue"/>
+        <Label value="Location" background="green"/>
+        <Label value="Date" background="orange"/>
+    </Labels>
+    <Text name="text" value="$text"/>
+</View>
+```
+
+Data format: `[{"text": "John works at Google in London."}]`
+
+#### Image Classification
+
+Classify images into categories. Each task needs an `image` URL.
+
+```xml
+<View>
+    <Image name="image" value="$image"/>
+    <Choices name="class" toName="image" choice="single">
+        <Choice value="Cat"/>
+        <Choice value="Dog"/>
+        <Choice value="Other"/>
+    </Choices>
+</View>
+```
+
+Data format: `[{"image": "https://s3.local.dev/datasets/img/photo.jpg"}]`
+
+#### LLM-Assisted Text Classification
+
+Auto-classify text using the LLM, then let annotators review. Requires
+the ML backend. Each task needs a `text` field.
+
+```xml
+<View>
+    <Style>
+        .lsf-main-content.lsf-requesting .prompt::before {
+            content: 'Classifying...';
+            color: #808080;
+        }
+    </Style>
+    <Text name="text" value="$text"/>
+    <View className="prompt">
+        <TextArea name="prompt" toName="text" editable="true" rows="2"
+                  maxSubmissions="1" showSubmitButton="false"
+                  value="$prompt"
+                  placeholder="Classification prompt — press Shift+Enter..."/>
+    </View>
+    <TextArea name="response" toName="text" smart="false" editable="true"/>
+    <Choices name="sentiment" toName="text" choice="single" showInline="true">
+        <Choice value="Positive"/>
+        <Choice value="Negative"/>
+        <Choice value="Neutral"/>
+    </Choices>
+</View>
+```
+
+Data format:
+```json
+[
+  {
+    "text": "I love this product, it works perfectly!",
+    "prompt": "Classify the sentiment of this text as Positive, Negative, or Neutral."
+  }
+]
+```
+
+---
+
+### Customising the LLM Prompt
+
+The ML backend wraps every LLM request using environment variables in
+`docker-compose.yml` under the `label-studio-ml` service:
+
+| Env Var | Default | Purpose |
+|---------|---------|---------|
+| `PROMPT_TEMPLATE` | `You are a helpful AI assistant...` | System prompt wrapping `{text}` and `{prompt}` |
+| `USE_INTERNAL_PROMPT_TEMPLATE` | `1` | `1` = use PROMPT_TEMPLATE; `0` = send user prompt as-is |
+| `PROMPT_PREFIX` | `prompt` | Name of the `<TextArea>` tag used for prompt input |
+| `OPENAI_MODEL` | `gemma-3-1b-it` | Model name passed to LocalAI |
+| `TEMPERATURE` | `0.7` | Sampling temperature |
+| `NUM_RESPONSES` | `1` | Number of completions per request |
+
+After changing any of these, restart the ML backend:
+
+```bash
+docker compose up -d label-studio-ml
+```
+
+### Memory & Performance
+
+The ML backend shares the LocalAI instance. Since `LOCALAI_MAX_ACTIVE_BACKENDS=1`,
+only one model is loaded at a time. If you use Open WebUI and Label Studio
+concurrently with different models, there will be LRU eviction overhead.
+
+CPU inference with `gemma-3-1b-it` takes **10–60 seconds** per request.
+The `ML_TIMEOUT_PREDICT` is set to 300 s to accommodate slow hardware.
+
+### Volume Permissions
+
+Label Studio runs as **UID 1001**. If you encounter permission errors, fix with:
+```bash
+sudo chown -R 1001:0 volumes/label-studio/app
+```
 
 ---
 

@@ -16,6 +16,7 @@ DOMAINS=(
   "traefik.local.dev"
   "localai.local.dev"
   "chat.local.dev"
+  "label-studio.local.dev"
 )
 
 MARKER="# mlflow-quick-stack"

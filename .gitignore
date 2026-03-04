@@ -15,6 +15,17 @@ volumes/localai/models/*
 !volumes/localai/models/*.yaml
 volumes/open-webui/*
 !volumes/open-webui/.gitkeep
+volumes/label-studio/*
+!volumes/label-studio/.gitkeep
+!volumes/label-studio/app
+!volumes/label-studio/ml
+!volumes/label-studio/postgres
+volumes/label-studio/app/*
+!volumes/label-studio/app/.gitkeep
+volumes/label-studio/ml/*
+!volumes/label-studio/ml/.gitkeep
+volumes/label-studio/postgres/*
+!volumes/label-studio/postgres/.gitkeep
 
 # Saved Docker images (large .tar files)
 images/*
